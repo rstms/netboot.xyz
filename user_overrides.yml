@@ -3,22 +3,24 @@
 # overrides defaults in netbootxyz role
 generate_menus: true
 generate_disks: true
+generate_disks_hybrid: true
 generate_checksums: true
 generate_local_vars: true
 make_num_jobs: 1
 
 # set desired site name
-# site_name: mysitename.com
+site_name: rstms
 
 # set desired boot domain
-# boot_domain: boot.mysitename.com
+boot_domain: netboot.rstms.net
 
 # set boot version
 # boot_version: "2.x"
+boot_timeout: 5000
 
-# bootloader_tftp_enabled: false
-# bootloader_https_enabled: true
-# bootloader_http_enabled: true
+bootloader_tftp_enabled: false
+bootloader_https_enabled: false
+bootloader_http_enabled: true
 
 # set release overrides from standard netboot.xyz defaults
 # release_overrides:
@@ -40,6 +42,9 @@ make_num_jobs: 1
 # set licensed media locations in boot.cfg
 # win_base_url:
 # rhel_base_url:
+#
+#custom_generate_menus: true
+#custom_templates_dir: "/ansible/custom"
 
 early_menu_enabled: false
 early_menu_contents: |
