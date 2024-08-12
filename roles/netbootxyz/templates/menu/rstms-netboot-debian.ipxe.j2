@@ -1,0 +1,21 @@
+#!ipxe
+
+# Debian MAC autoconfig netboot
+
+set os_arch amd64
+set debian_mirror http://install.rstms.net
+set debian_base_dir debian
+set debian_version bookworm
+set mirrorcfg mirror/suite=${debian_version}
+set dir ${debian_base_dir}/dists/${debian_version}/main/installer-${os_arch}/current/images/netboot/debian-installer/${os_arch}
+set install_params auto=true priority=critical preseed/url=http://netboot.rstms.net/${net0/mac}-preseed.conf
+
+imgfree
+kernel ${debian_mirror}/${dir}/linux ${install_params} ${netcfg} ${mirrorcfg} 
+initrd ${debian_mirror}/${dir}/initrd.gz
+echo
+echo MD5sums:
+md5sum linux initrd.gz
+boot
+
+exit 0

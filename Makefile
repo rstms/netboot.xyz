@@ -10,7 +10,8 @@ compile: build
 upload: compile
 	ssh netboot@rigel rm -rf htdocs/*
 	scp -rp buildout/* netboot@rigel:htdocs/
-	cp buildout/ipxe/netboot.xyz.iso /mnt/beaker/h/vmware/iso/netboot.iso
+	ssh netboot@rigel mv htdocs/ipxe/netboot.xyz.iso htdocs/rstms-netboot.iso
+	cp buildout/ipxe/netboot.xyz.iso /mnt/beaker/h/vmware/iso/rstms-netboot.iso
 
 clean:
 	rm -rf buildout

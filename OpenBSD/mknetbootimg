@@ -1,0 +1,184 @@
+#!/bin/sh
+
+set -x
+set -eu
+
+autoinstall_server=install.rstms.net
+#halt_after_install=1
+
+src_image_name=install
+ramdisk_kernel=bsd.rd
+netboot_image_size=8192
+
+version=7.5
+label="$(echo $version | tr -d .)"
+arch=amd64
+dist_dir=/var/www/htdocs/pub/OpenBSD/$version/$arch
+
+usage() {
+  case $cmd in
+    make-autoboot-image) echo >&2 "Usage: make-autoboot-image SRC RESPONSE_FILE DST";;
+  esac
+  exit 2
+}
+
+fail() {
+  echo >&2 "$(basename $0):" "$@"
+  exit 1
+}
+
+workdir=
+
+cleanup() {
+  mount | awk "/\\/dev\\/vnd/{print \$1}" | xargs -r -n 1 umount
+  vnconfig -l | grep -v 'not in use' | awk -F '[ :]*' '{print $1}' | xargs -r -n 1 vnconfig -u
+  [ -n "$workdir" -a -f $workdir ] && rm -rf $workdir
+  ( cd /tmp; rm -rf $(ls | grep '^tmp.') ) 
+}
+
+#trap cleanup EXIT
+
+cleanup
+
+workdir=$(mktemp -d)
+
+get_vnd() {
+  vnconfig -l | awk -F: '/not in use/{print $1}' | tail -1
+}
+
+find_partition() {
+  disklabel $1 | awk -F'[ :]*' '/4.2BSD/{print $2}'
+}
+
+cp $dist_dir/bsd.rd $workdir/$ramdisk_kernel.Z
+gunzip $workdir/$ramdisk_kernel.Z
+
+rdsetroot -x $workdir/$ramdisk_kernel $workdir/ramdisk.img
+cp $workdir/ramdisk.img $workdir/ramdisk.img.orig
+
+rd_vnd=$(get_vnd)
+[ -n "$rd_vnd" ] || fail cannot allocate ramdisk vnd
+vnconfig $rd_vnd $workdir/ramdisk.img
+
+# store disktab format of original ramdisk.img
+disklabel -t $rd_vnd >$workdir/ramdisk.disktab
+
+ramdisk_partition=$(find_partition $rd_vnd)
+mkdir $workdir/ramdisk
+mount /dev/${rd_vnd}${ramdisk_partition} $workdir/ramdisk
+
+# start changes to ramdisk filesystem
+
+cat >$workdir/ramdisk/netboot <<EOF
+#!/bin/ksh
+echo Requesting autoinstall config from $autoinstall_server...
+FUNCS_ONLY=1
+. /autoinstall
+cat >/netboot.env <<_EOF
+AI_SERVER=$autoinstall_server
+AI_MODE=install
+_EOF
+ifconfig \$(get_ifs) group netboot
+get_responsefile \$(get_ifs)
+EOF
+
+chmod +x $workdir/ramdisk/netboot
+
+ed $workdir/ramdisk/install.sub <<EOF
+/[[:space:]]*if \[\[ -n \$AI_SERVER && -n \$AI_MODE \]\]/i
+	[ -f /netboot.env ] && . /netboot.env
+
+.
+w
+q
+EOF
+
+ed $workdir/ramdisk/.profile <<EOF
+/.autoinstall -x/
+i
+	/netboot
+.
+w
+q
+EOF
+
+if [ -v halt_after_install ]; then
+  sed -e 's/exec reboot$/exec halt/' -i $workdir/ramdisk/install.sub
+fi
+
+
+# finished changes to ramdisk dir, now create new ramdisk filesystem
+
+
+ramdisk_label=$(sed -n '/^[^[:space:]]/s/|.*//p' $workdir/ramdisk.disktab)
+
+sed -e "s/$ramdisk_label/rdnetboot/g" -i $workdir/ramdisk.disktab
+
+# remove rdnetboot entry and trailing spaces from local disktab
+cp /etc/disktab $workdir/disktab.orig
+awk <$workdir/disktab.orig -v echo=1 '
+    /^[^[:space:]]/{ echo=1 }
+    /^rdnetboot\|/{ echo=0 }
+    { if (echo) print }
+  ' \
+  | cat -s \
+  | gtac \
+  | sed '/./,$!d' \
+  | gtac  >$workdir/disktab
+
+# ensure no rdnetboot entry in local disktab
+grep '^rdnetboot|' $workdir/disktab && fail unexpected rdnetboot entry in $(realpath $workdir/disktab)
+
+# add rdrootf entry to local disktab
+echo >>$workdir/disktab
+cat $workdir/ramdisk.disktab >>$workdir/disktab
+
+if diff /etc/disktab $workdir/disktab; then
+  echo /etc/disktab not changed
+else
+  echo "updating /etc/disktab"
+  cp $workdir/disktab /etc/disktab
+fi 
+
+# generate the ramdisk filesystem: see /usr/src/distrib/amd64/ramdisk{A,_cd}/Makefile
+makefs -o disklabel=rdnetboot,minfree=0,density=4096 $workdir/ramdisk.fs $workdir/ramdisk
+
+umount $workdir/ramdisk
+vnconfig -u $rd_vnd
+
+rdsetroot $workdir/$ramdisk_kernel $workdir/ramdisk.fs
+
+netboot_image=$workdir/netboot${label}.img
+
+dd if=/dev/zero of=$netboot_image bs=1k count=$netboot_image_size
+netboot_vnd=$(get_vnd)
+vnconfig $netboot_vnd $netboot_image
+fdisk -b 960 -gAiy $netboot_vnd
+disklabel -wA $netboot_vnd
+newfs ${netboot_vnd}a
+mkdir $workdir/netboot
+mount /dev/${netboot_vnd}a $workdir/netboot
+
+# compress updated ramdisk kernel into mounted image dir
+gzip -9cn $workdir/bsd.rd >$workdir/netboot/bsd.rd
+ln $workdir/netboot/bsd.rd $workdir/netboot/bsd
+
+# write boot.conf
+mkdir $workdir/netboot/etc
+echo "boot /bsd.rd" >$workdir/netboot/etc/boot.conf
+
+# install bootloaders
+tar xzf $dist_dir/base${label}.tgz -C $workdir/netboot ./usr/mdec/biosboot ./usr/mdec/boot
+installboot -v -r $workdir/netboot $netboot_vnd $workdir/netboot/usr/mdec/biosboot $workdir/netboot/usr/mdec/boot
+
+umount $workdir/netboot
+
+# copy EFI partition filesystem
+install_vnd=$(get_vnd)
+vnconfig $install_vnd $dist_dir/install$label.img
+dd if=/dev/${install_vnd}i of=/dev/${netboot_vnd}i
+
+vnconfig -u $install_vnd
+vnconfig -u $netboot_vnd
+
+cp $netboot_image $dist_dir
