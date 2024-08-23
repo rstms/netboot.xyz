@@ -1,12 +1,13 @@
 #!ipxe
 
-echo "rstms netboot menu v0.0.6"
-
-#set cmdline console=ttyS1,115200n8
 dhcp || echo "dhcp failed"
+
+set cls:hex 1b:5b:4a  # ANSI clear screen sequence - "^[[J"
+set cls ${cls:string}
 
 :main_menu
 clear main_menu_choice
+echo ${cls}
 menu Reliance Systems Netboot Menu
 item --gap Default:
 item mac_autoinstall MAC Address Autoinstall
@@ -18,7 +19,7 @@ item --gap netboot.xyz
 item netboot_xyz netboot.xyz menu
 item --gap Tools:
 item shell iPXE shell
-choose main_menu_choice || goto menu_exit
+choose --timeout 5000 --default mac_autoinstall main_menu_choice || goto local
 echo ${cls}
 goto ${main_menu_choice}
 goto main_menu
