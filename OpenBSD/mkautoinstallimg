@@ -1,27 +1,30 @@
 #!/bin/sh
 
+# make OpenBSD autoinstall netboot image 
+# works with IPXE: sanboot http://server/netbootXX.img
+# customizes installXX.img to create netbootXX.img
+# netbootXX.img autoinstalls as if loaded by pxeboot
+# looks for response file at http://<SERVER_I_CAME_FROM>/<MY_MAC_ADDRESS>-install.conf
+
 set -x
 set -eu
 
-autoinstall_server=install.rstms.net
+dst_img=$2
+cp $1 $dst_img
+chmod 0600 $dst_img
+
+autoinstall_server=netboot.rstms.net
 #halt_after_install=1
 
 src_image_name=install
 ramdisk_kernel=bsd.rd
+netboot_image_size=8192
 
 version=7.5
 label="$(echo $version | tr -d .)"
 arch=amd64
 base_dir=/var/www/htdocs
-src_img="$base_dir/pub/OpenBSD/$version/$arch/${src_image_name}${label}.img"
-dst_img="$base_dir/pub/OpenBSD/$version/$arch/netboot${label}.img"
 
-usage() {
-  case $cmd in
-    make-autoboot-image) echo >&2 "Usage: make-autoboot-image SRC RESPONSE_FILE DST";;
-  esac
-  exit 2
-}
 
 fail() {
   echo >&2 "$(basename $0):" "$@"
@@ -51,7 +54,6 @@ find_partition() {
   disklabel $1 | awk -F'[ :]*' '/4.2BSD/{print $2}'
 }
 
-cp $src_img $dst_img
 image_vnd=$(get_vnd)
 [ -n "$image_vnd" ] || fail cannot allocate source vnd
 
@@ -59,6 +61,7 @@ vnconfig $image_vnd $dst_img
 partition=$(find_partition $image_vnd)
 mkdir $workdir/src
 mount /dev/${image_vnd}${partition} $workdir/src
+
 
 cp $workdir/src/$ramdisk_kernel $workdir/$ramdisk_kernel.Z
 gunzip $workdir/$ramdisk_kernel.Z
@@ -119,7 +122,6 @@ fi
 
 # finished changes to ramdisk dir, now create new ramdisk filesystem
 
-
 ramdisk_label=$(sed -n '/^[^[:space:]]/s/|.*//p' $workdir/ramdisk.disktab)
 
 sed -e "s/$ramdisk_label/rdnetboot/g" -i $workdir/ramdisk.disktab
@@ -159,20 +161,40 @@ vnconfig -u $rd_vnd
 rdsetroot $workdir/$ramdisk_kernel $workdir/ramdisk.fs
 
 # delete original ramdisk kernel and hard link if present
-rm $workdir/src/$ramdisk_kernel
+rm -f $workdir/src/bsd*
 [ -d $workdir/src/$version ] && rm $workdir/src/$version/$arch/$ramdisk_kernel
 
 # compress updated ramdisk kernel into mounted image dir
 gzip -9cn $workdir/$ramdisk_kernel >$workdir/src/$ramdisk_kernel
 
-# hard link distrib kernel if present
-[ -d $workdir/src/$version ] && ln $workdir/src/$ramdisk_kernel $workdir/src/$version/$arch/$ramdisk_kernel
+# delete install package dir
+[ -d $workdir/src/$version ] && rm -rf $workdir/src/$version
 
-# remove install packages
-rm -rf $workdir/src/$version
+# update boot.conf
+ls -al $workdir/src
+mkdir -p $workdir/src/etc
+echo "set image /bsd.rd" >$workdir/src/etc/boot.conf
+
+dd if=/dev/zero of=$workdir/new.img bs=1k count=$netboot_image_size
+new_vnd=$(get_vnd)
+vnconfig $new_vnd $workdir/new.img
+fdisk -b 960 -gAiy $new_vnd
+disklabel -wA $new_vnd
+newfs ${new_vnd}a
+mkdir $workdir/new
+mount /dev/${new_vnd}a $workdir/new
+cp -rp $workdir/src/* $workdir/new
+ln $workdir/new/bsd.rd $workdir/new/bsd
+tar xzf /var/www/htdocs/pub/OpenBSD/7.5/amd64/base75.tgz -C $workdir/new ./usr/mdec/biosboot ./usr/mdec/boot
+installboot -v -r $workdir/new $new_vnd $workdir/new/usr/mdec/biosboot $workdir/new/usr/mdec/boot
+umount $workdir/new
+echo "installboot done"
+vnconfig -u $new_vnd
 
 # unmount destination image
 umount $workdir/src
 
 # unlink destination vnd
 vnconfig -u $image_vnd
+
+cp $workdir/new.img $dst_img
