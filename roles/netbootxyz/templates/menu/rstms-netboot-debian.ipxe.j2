@@ -8,10 +8,10 @@ set debian_base_dir debian
 set debian_version bookworm
 set mirrorcfg mirror/suite=${debian_version}
 set dir ${debian_base_dir}/dists/${debian_version}/main/installer-${os_arch}/current/images/netboot/debian-installer/${os_arch}
-set install_params auto=true priority=critical preseed/url=${debian_mirror}/${net0/mac}-preseed.conf
+set install_params auto=true priority=critical preseed/url=${debian_mirror}/${net0/mac}-preseed.conf net.ifnames=0 biosdevname=0
 
 imgfree
-kernel ${debian_mirror}/${dir}/linux ${install_params} ${netcfg} ${mirrorcfg} 
+kernel ${debian_mirror}/${dir}/linux ${install_params} ${netcfg} ${mirrorcfg} interface=eth0 
 initrd ${debian_mirror}/${dir}/initrd.gz
 echo
 echo MD5sums:
